@@ -1,0 +1,28 @@
+# CMake and build output
+build/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+Makefile
+install_manifest.txt
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.vcxproj.user
+
+# Runtime logs and local experiment data
+logs/
+results/
+*.log
+*.jsonl
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
