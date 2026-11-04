@@ -14,7 +14,9 @@ struct GeneratorConfig {
   std::size_t maxDepth = 2;
   std::size_t maxExpressions = 1000;
   std::vector<std::uint32_t> constants;
-  std::vector<Op> operations = {Op::Add, Op::Sub, Op::Xor, Op::And, Op::Shl};
+  std::vector<ExpressionPtr> seedExpressions;
+  std::vector<Op> operations = {Op::Add, Op::Sub, Op::Mul, Op::UDiv,
+                                Op::Xor, Op::And, Op::Or, Op::Shl};
 };
 
 class ExpressionGenerator {

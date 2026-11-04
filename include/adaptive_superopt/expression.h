@@ -16,8 +16,11 @@ enum class Op {
   Constant,
   Add,
   Sub,
+  Mul,
+  UDiv,
   Xor,
   And,
+  Or,
   Shl,
 };
 

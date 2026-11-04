@@ -116,6 +116,7 @@ int main(int argc, char** argv) {
     config.selector.exploration = 1.0;
     config.selector.timePenalty = 0.1;
     config.backend.lanes = 2;
+    config.backend.width = options.width;
     config.backend.codeSizeWeight = 0.02;
     config.backend.latency[Op::Shl] = 3.0;
 

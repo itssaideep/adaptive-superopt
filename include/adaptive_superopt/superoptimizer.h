@@ -5,6 +5,7 @@
 #include "adaptive_superopt/verifier.h"
 
 #include <cstddef>
+#include <chrono>
 #include <vector>
 
 namespace adaptive_superopt {
@@ -25,6 +26,9 @@ struct SearchResult {
   SelectionResult adaptive;
   SelectionResult staticBaseline;
   SelectionResult exhaustive;
+  double adaptiveRuntimeMs = 0.0;
+  double staticRuntimeMs = 0.0;
+  double exhaustiveRuntimeMs = 0.0;
   std::size_t adaptiveCacheHits = 0;
   std::size_t staticCacheHits = 0;
   std::size_t exhaustiveCacheHits = 0;

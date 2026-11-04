@@ -2,12 +2,16 @@
 
 #include "adaptive_superopt/backend.h"
 #include "adaptive_superopt/expression.h"
+#include "adaptive_superopt/generator.h"
 #include "adaptive_superopt/superoptimizer.h"
 #include "adaptive_superopt/verifier.h"
 
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <map>
+#include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -19,11 +23,14 @@ using adaptive_superopt::CachingBackend;
 using adaptive_superopt::Candidate;
 using adaptive_superopt::AdaptiveSelector;
 using adaptive_superopt::ExhaustiveVerifier;
+using adaptive_superopt::ExpressionGenerator;
 using adaptive_superopt::ExpressionPtr;
+using adaptive_superopt::GeneratorConfig;
 using adaptive_superopt::Op;
 using adaptive_superopt::SearchConfig;
 using adaptive_superopt::SelectorConfig;
 using adaptive_superopt::Superoptimizer;
+using adaptive_superopt::VerificationConfig;
 using adaptive_superopt::VerificationStatus;
 using adaptive_superopt::makeBinary;
 using adaptive_superopt::makeConstant;
@@ -34,6 +41,43 @@ void expect(bool condition, const std::string& message) {
     std::cerr << "FAIL: " << message << '\n';
     std::exit(EXIT_FAILURE);
   }
+}
+
+void expectThrows(const std::function<void()>& action,
+                  const std::string& message) {
+  try {
+    action();
+  } catch (const std::exception&) {
+    return;
+  }
+  std::cerr << "FAIL: " << message << '\n';
+  std::exit(EXIT_FAILURE);
+}
+
+bool hasInvalidShift(const ExpressionPtr& expression) {
+  if (!expression || expression->op == Op::Variable ||
+      expression->op == Op::Constant) {
+    return false;
+  }
+  if (expression->op == Op::Shl &&
+      (!expression->rhs || expression->rhs->op != Op::Constant)) {
+    return true;
+  }
+  return hasInvalidShift(expression->lhs) || hasInvalidShift(expression->rhs);
+}
+
+bool hasInvalidDivision(const ExpressionPtr& expression) {
+  if (!expression || expression->op == Op::Variable ||
+      expression->op == Op::Constant) {
+    return false;
+  }
+  if (expression->op == Op::UDiv &&
+      (!expression->rhs || expression->rhs->op != Op::Constant ||
+       expression->rhs->value == 0)) {
+    return true;
+  }
+  return hasInvalidDivision(expression->lhs) ||
+         hasInvalidDivision(expression->rhs);
 }
 
 std::vector<Candidate> candidates() {
@@ -164,6 +208,133 @@ void testExhaustiveVerificationAndBitVectorSemantics() {
          "bit-vector verifier should reject a non-equivalent expression");
 }
 
+void testBitVectorWraparoundAndMultiVariableVerification() {
+  const ExpressionPtr x = makeVariable(0);
+  const ExpressionPtr y = makeVariable(1);
+  const ExpressionPtr add = makeBinary(Op::Add, x, makeConstant(1));
+  const ExpressionPtr subtract = makeBinary(Op::Sub, x, makeConstant(2));
+  const ExpressionPtr shift = makeBinary(Op::Shl, x, makeConstant(1));
+
+  expect(adaptive_superopt::evaluate(add, {15}, 4) == 0,
+         "addition should wrap at the configured bit width");
+  expect(adaptive_superopt::evaluate(subtract, {0}, 4) == 14,
+         "subtraction should wrap at the configured bit width");
+  expect(adaptive_superopt::evaluate(shift, {9}, 4) == 2,
+         "left shift should wrap at the configured bit width");
+  expect(adaptive_superopt::evaluate(
+             makeBinary(Op::Mul, x, makeConstant(2)), {15}, 4) == 14,
+         "multiplication should wrap at the configured bit width");
+  expect(adaptive_superopt::evaluate(
+             makeBinary(Op::UDiv, x, makeConstant(4)), {15}, 4) == 3,
+         "unsigned division should use fixed-width unsigned semantics");
+  expect(adaptive_superopt::evaluate(
+             makeBinary(Op::Or, x, makeConstant(1)), {8}, 4) == 9,
+         "bitwise OR should preserve fixed-width bit-vector semantics");
+  expect(adaptive_superopt::evaluate(x, {31}, 4) == 15,
+         "variable inputs should be masked to the configured bit width");
+  expectThrows(
+      [&] { adaptive_superopt::evaluate(
+                makeBinary(Op::UDiv, x, makeConstant(0)), {1}, 4); },
+      "unsigned division by zero should be rejected");
+
+  adaptive_superopt::VerificationConfig config;
+  config.width = 2;
+  config.variableCount = 2;
+  config.maxCases = 16;
+  const ExhaustiveVerifier verifier(config);
+  const auto result = verifier.verify(makeBinary(Op::Add, x, y),
+                                      makeBinary(Op::Add, y, x));
+  expect(result.status == VerificationStatus::Equivalent,
+         "multi-variable commutativity should verify over the full domain");
+  expect(result.casesChecked == 16,
+         "multi-variable verification should check every input tuple");
+}
+
+void testVerificationBudgetAndInvalidExpressions() {
+  const ExpressionPtr x = makeVariable(0);
+  const ExhaustiveVerifier oversized(VerificationConfig{4, 2, 15});
+  const auto oversizedResult = oversized.verify(x, x);
+  expect(oversizedResult.status == VerificationStatus::Rejected,
+         "verification should reject an input domain over its case budget");
+
+  const ExhaustiveVerifier invalid(VerificationConfig{4, 1, 16});
+  const auto invalidResult = invalid.verify(x, makeVariable(1));
+  expect(invalidResult.status == VerificationStatus::Rejected,
+         "verification should reject expressions with missing variables");
+
+  expectThrows(
+      [] { ExhaustiveVerifier(VerificationConfig{0, 1, 1}); },
+      "verifier should reject a zero-bit domain");
+}
+
+void testGeneratorBoundsAndCanonicalization() {
+  GeneratorConfig config;
+  config.width = 4;
+  config.variableCount = 1;
+  config.maxDepth = 2;
+  config.maxExpressions = 40;
+  const ExpressionGenerator generator(config);
+  const auto expressions = generator.generate();
+  std::set<std::string> ids;
+  for (const ExpressionPtr& expression : expressions) {
+    ids.insert(adaptive_superopt::toString(expression));
+    expect(adaptive_superopt::expressionDepth(expression) <= 2,
+           "generator should respect the maximum expression depth");
+    expect(!hasInvalidShift(expression),
+           "generated shifts should use constant shift amounts");
+    expect(!hasInvalidDivision(expression),
+           "generated divisions should use nonzero constant divisors");
+  }
+  expect(expressions.size() <= 40,
+         "generator should respect the maximum expression count");
+  expect(ids.size() == expressions.size(),
+         "generator should not emit duplicate expressions");
+
+  GeneratorConfig tiny = config;
+  tiny.maxExpressions = 1;
+  expect(ExpressionGenerator(tiny).generate().size() == 1,
+         "generator should support the smallest positive candidate limit");
+}
+
+void testSelectorBoundaryRejections() {
+  const Candidate candidate{"candidate", "test", 1.0, {1.0}, true, 1.0};
+  const auto evaluator = [](const Candidate&) {
+    return BackendResult{true, 1.0, 1.0, 4.0, 1.0, ""};
+  };
+
+  SelectorConfig zeroBudget;
+  zeroBudget.backendBudget = 0;
+  const auto empty = AdaptiveSelector(2.0, 2.0, zeroBudget)
+                         .select({candidate}, evaluator);
+  expect(empty.backendInvocations == 0 && empty.evaluations.empty(),
+         "zero budget should perform no backend calls");
+
+  const Candidate unverified{"unverified", "test", 1.0, {1.0}, false, 1.0};
+  SelectorConfig budget;
+  budget.backendBudget = 1;
+  const auto rejected = AdaptiveSelector(2.0, 2.0, budget)
+                            .select({unverified}, evaluator);
+  expect(rejected.backendInvocations == 0,
+         "a pool without verified candidates should perform no calls");
+
+  expectThrows(
+      [&] {
+        AdaptiveSelector(2.0, 2.0, budget).select(
+            {candidate}, [](const Candidate&) {
+              return BackendResult{true, 0.0, 0.0, 4.0, 1.0, "bad objective"};
+            });
+      },
+      "selector should reject successful backend results with zero objective");
+
+  const Candidate mismatched{"mismatched", "test", 1.0, {1.0, 2.0}, true, 1.0};
+  expectThrows(
+      [&] {
+        AdaptiveSelector(2.0, 2.0, budget).select(
+            {candidate, mismatched}, evaluator);
+      },
+      "selector should reject inconsistent feature dimensions");
+}
+
 void testBackendCacheAndUnsupportedOperation() {
   BackendConfig config;
   config.supportedOperations = {Op::Add};
@@ -184,6 +355,60 @@ void testBackendCacheAndUnsupportedOperation() {
          "unsupported operation should be rejected by the backend");
 }
 
+void testStaticAndBackendRankingsCanDisagree() {
+  BackendConfig config;
+  config.width = 8;
+  config.latency[Op::Mul] = 3.0;
+  config.latency[Op::Shl] = 1.0;
+  const adaptive_superopt::TargetBackend backend(config);
+  const ExpressionPtr x = makeVariable(0);
+
+  const Candidate multiply{
+      "multiply-by-three", "multiply", 2.0, {1.0}, true, 1.0,
+      makeBinary(Op::Mul, x, makeConstant(3))};
+  const Candidate shiftAdd{
+      "shift-add-by-three", "shift-add", 3.0, {1.0}, true, 1.0,
+      makeBinary(Op::Add, x, makeBinary(Op::Shl, x, makeConstant(1)))};
+
+  const BackendResult multiplyResult = backend.evaluate(multiply);
+  const BackendResult shiftAddResult = backend.evaluate(shiftAdd);
+  expect(multiply.staticCost < shiftAdd.staticCost,
+         "static model should prefer the single multiply");
+  expect(shiftAddResult.objective < multiplyResult.objective,
+         "backend model should prefer the parallel shift-add form");
+}
+
+void testBackendFoldingAndCse() {
+  BackendConfig config;
+  config.width = 8;
+  const adaptive_superopt::TargetBackend backend(config);
+  const ExpressionPtr x = makeVariable(0);
+  const ExpressionPtr term = makeBinary(Op::Add, x, makeConstant(1));
+
+  const Candidate folded{"folded", "folding", 3.0, {1.0}, true, 1.0,
+                         makeBinary(Op::Mul,
+                                    makeBinary(Op::Add, x, makeConstant(0)),
+                                    makeConstant(1))};
+  const Candidate cse{"cse", "cse", 4.0, {1.0}, true, 1.0,
+                      makeBinary(Op::Add, term, term)};
+  const Candidate expanded{"expanded", "expanded", 4.0, {1.0}, true, 1.0,
+                           makeBinary(
+                               Op::Add,
+                               makeBinary(Op::Add, x, makeConstant(1)),
+                               makeBinary(
+                                   Op::Add,
+                                   makeBinary(Op::Add, x, makeConstant(0)),
+                                   makeConstant(1)))};
+
+  const BackendResult foldedResult = backend.evaluate(folded);
+  const BackendResult cseResult = backend.evaluate(cse);
+  const BackendResult expandedResult = backend.evaluate(expanded);
+  expect(foldedResult.objective == 1.0,
+         "backend should fold neutral arithmetic patterns");
+  expect(cseResult.codeSizeBytes < expandedResult.codeSizeBytes,
+         "backend CSE should reduce repeated subexpressions");
+}
+
 void testCompleteSearchPipeline() {
   const ExpressionPtr x = makeVariable(0);
   const ExpressionPtr masked = makeBinary(Op::And, x, makeConstant(15));
@@ -196,6 +421,7 @@ void testCompleteSearchPipeline() {
   config.generator.maxExpressions = 250;
   config.verifier.width = 4;
   config.verifier.variableCount = 1;
+  config.backend.width = 4;
   config.selector.backendBudget = 3;
   config.selector.seedCandidates = 1;
   config.backend.latency[Op::Shl] = 3.0;
@@ -225,7 +451,13 @@ int main() {
   testBackendFailureIsNotSelected();
   testBackendFeedbackChangesTheNextChoice();
   testExhaustiveVerificationAndBitVectorSemantics();
+  testBitVectorWraparoundAndMultiVariableVerification();
+  testVerificationBudgetAndInvalidExpressions();
+  testGeneratorBoundsAndCanonicalization();
+  testSelectorBoundaryRejections();
   testBackendCacheAndUnsupportedOperation();
+  testStaticAndBackendRankingsCanDisagree();
+  testBackendFoldingAndCse();
   testCompleteSearchPipeline();
   std::cout << "all selector tests passed\n";
   return EXIT_SUCCESS;

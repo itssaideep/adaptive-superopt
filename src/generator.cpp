@@ -11,7 +11,8 @@ namespace adaptive_superopt {
 namespace {
 
 bool isCommutative(Op op) {
-  return op == Op::Add || op == Op::Xor || op == Op::And;
+  return op == Op::Add || op == Op::Mul || op == Op::Xor || op == Op::And ||
+         op == Op::Or;
 }
 
 std::uint32_t widthMask(unsigned width) {
@@ -47,7 +48,11 @@ std::vector<ExpressionPtr> ExpressionGenerator::generate() const {
       return true;
     }
     all.push_back(expression);
-    levels[expressionDepth(expression)].push_back(expression);
+    const std::size_t depth = expressionDepth(expression);
+    if (depth >= levels.size()) {
+      levels.resize(depth + 1);
+    }
+    levels[depth].push_back(expression);
     return true;
   };
 
@@ -71,6 +76,18 @@ std::vector<ExpressionPtr> ExpressionGenerator::generate() const {
     }
   }
 
+  // Seed expressions make it possible to evaluate a known rewrite corpus
+  // without relying on the grammar's enumeration order to reach every
+  // interesting identity before the candidate limit.
+  for (const ExpressionPtr& seed : config_.seedExpressions) {
+    if (!seed) {
+      throw std::invalid_argument("seed expressions must not be null");
+    }
+    if (!add(seed)) {
+      return all;
+    }
+  }
+
   for (std::size_t depth = 1; depth <= config_.maxDepth; ++depth) {
     bool reachedLimit = false;
     for (std::size_t lhsDepth = 0; lhsDepth < depth && !reachedLimit;
@@ -83,7 +100,11 @@ std::vector<ExpressionPtr> ExpressionGenerator::generate() const {
         for (const ExpressionPtr& lhs : levels[lhsDepth]) {
           for (const ExpressionPtr& rhs : levels[rhsDepth]) {
             for (const Op operation : config_.operations) {
-              if (operation == Op::Shl && rhs->op != Op::Constant) {
+              if ((operation == Op::Shl || operation == Op::UDiv) &&
+                  rhs->op != Op::Constant) {
+                continue;
+              }
+              if (operation == Op::UDiv && rhs->value == 0) {
                 continue;
               }
               if (isCommutative(operation) &&

@@ -50,11 +50,28 @@ std::uint32_t evaluateUnchecked(const ExpressionPtr& expression,
       return (evaluateUnchecked(expression->lhs, inputs, width) -
               evaluateUnchecked(expression->rhs, inputs, width)) &
              mask;
+    case Op::Mul:
+      return (evaluateUnchecked(expression->lhs, inputs, width) *
+              evaluateUnchecked(expression->rhs, inputs, width)) &
+             mask;
+    case Op::UDiv: {
+      const std::uint32_t lhs =
+          evaluateUnchecked(expression->lhs, inputs, width);
+      const std::uint32_t rhs =
+          evaluateUnchecked(expression->rhs, inputs, width);
+      if (rhs == 0) {
+        throw std::invalid_argument("unsigned division by zero");
+      }
+      return lhs / rhs;
+    }
     case Op::Xor:
       return evaluateUnchecked(expression->lhs, inputs, width) ^
              evaluateUnchecked(expression->rhs, inputs, width);
     case Op::And:
       return evaluateUnchecked(expression->lhs, inputs, width) &
+             evaluateUnchecked(expression->rhs, inputs, width);
+    case Op::Or:
+      return evaluateUnchecked(expression->lhs, inputs, width) |
              evaluateUnchecked(expression->rhs, inputs, width);
     case Op::Shl: {
       const std::uint32_t lhs =
@@ -147,10 +164,16 @@ std::string opName(Op op) {
       return "+";
     case Op::Sub:
       return "-";
+    case Op::Mul:
+      return "*";
+    case Op::UDiv:
+      return "/u";
     case Op::Xor:
       return "^";
     case Op::And:
       return "&";
+    case Op::Or:
+      return "|";
     case Op::Shl:
       return "<<";
   }

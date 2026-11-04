@@ -18,6 +18,23 @@ invocation budget.
 The implementation provides a controlled environment for testing the search
 policy before connecting a real compiler backend.
 
+The reproducible budget sweep is implemented by
+`adaptive_superopt_budget_experiment`. It uses the same verified candidate set
+for budgets 1, 2, 3, 5, 10 and 20, and writes CSV rows for adaptive, static and
+exhaustive selection. The current benchmark suite covers masked arithmetic,
+scaled multiplication, unsigned division, identity simplification and
+masking/OR identities.
+
+The same run produces `results/static_accuracy.csv`. It compares every
+verified candidate's static cost with the backend objective and records raw
+and relative error plus static-versus-backend rank disagreement.
+
+The reference backend deliberately models deceptive rankings: raw expression
+operation count is used as the static prior, while backend cost accounts for
+operation latency, VLIW issue width, dependencies, common subexpressions,
+neutral-operation folding, multiply strength reduction and fused multiply-add
+patterns.
+
 ## Proposed contribution
 
 The proposed contribution is a budget-aware candidate selector. SMT

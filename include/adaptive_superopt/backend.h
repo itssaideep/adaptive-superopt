@@ -10,14 +10,19 @@
 namespace adaptive_superopt {
 
 struct BackendConfig {
+  unsigned width = 8;
   unsigned lanes = 2;
   std::size_t instructionBytes = 4;
   double codeSizeWeight = 0.02;
+  bool enableCse = true;
+  bool enableStrengthReduction = true;
+  bool enablePatternFolding = true;
   std::set<Op> supportedOperations = {
-      Op::Add, Op::Sub, Op::Xor, Op::And, Op::Shl};
+      Op::Add, Op::Sub, Op::Mul, Op::UDiv, Op::Xor, Op::And, Op::Or,
+      Op::Shl};
   std::map<Op, double> latency = {
-      {Op::Add, 1.0}, {Op::Sub, 1.0}, {Op::Xor, 1.0},
-      {Op::And, 1.0}, {Op::Shl, 2.0}};
+      {Op::Add, 1.0}, {Op::Sub, 1.0}, {Op::Mul, 2.0}, {Op::UDiv, 4.0},
+      {Op::Xor, 1.0}, {Op::And, 1.0}, {Op::Or, 1.0}, {Op::Shl, 1.0}};
 };
 
 class TargetBackend {

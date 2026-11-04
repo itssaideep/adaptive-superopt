@@ -29,7 +29,9 @@ changing the selector contract.
 - `expression.*`: immutable expression trees and fixed-width evaluation;
 - `generator.*`: bounded candidate enumeration;
 - `verifier.*`: exhaustive equivalence checking;
-- `backend.*`: deterministic target-cost model and evaluation cache;
+- `backend.*`: deterministic target-cost model with lanes, dependencies,
+  common-subexpression elimination, strength reduction, pattern folding and
+  evaluation cache;
 - `selector.*`: static prior, online residual model and budgeted acquisition;
 - `superoptimizer.*`: end-to-end pipeline and baseline runners.
 
@@ -62,6 +64,19 @@ For example:
 build/Release/adaptive_superopt_demo.exe --budget 2 --depth 2
 ```
 
+Run the progressive budget experiment:
+
+```text
+build/Release/adaptive_superopt_budget_experiment.exe > results/budget_experiment.csv
+```
+
+It evaluates masked arithmetic, multiplication, unsigned division, identity,
+and masking/OR benchmarks at budgets 1, 2, 3, 5, 10 and 20. The CSV records
+verified candidate count, backend calls, search runtime, best objective,
+improvement over the reference, and whether the exhaustive optimum was found.
+The same run also writes `results/static_accuracy.csv`, containing static and
+backend costs, absolute/relative prediction error, and rank disagreement.
+
 On Windows with LLVM-MinGW, run the executable with the compiler's `bin`
 directory on `PATH` so its runtime DLLs can be found.
 
@@ -82,8 +97,9 @@ cycles, code size and VLIW-style scheduling reports
 ```
 
 The current correctness guarantee is exhaustive equivalence within the
-configured finite input domain. It is not a proof for arbitrary LLVM
-undefined-behavior semantics. LLVM/Souper/Z3 and real compiler backends remain
+configured finite input domain. Multiplication and arithmetic use modulo
+`2^width` semantics; division is unsigned and requires a nonzero divisor. It
+is not a proof for arbitrary LLVM undefined-behavior semantics. LLVM/Souper/Z3 and real compiler backends remain
 integration adapters for a later target-specific deployment.
 
 See [`docs/research-plan.md`](docs/research-plan.md) for the research

@@ -3,6 +3,7 @@
 #include "adaptive_superopt/expression.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -27,8 +28,11 @@ std::vector<double> featuresFor(const ExpressionPtr& expression) {
       static_cast<double>(expressionDepth(expression)),
       static_cast<double>(operationCount(expression, Op::Add)),
       static_cast<double>(operationCount(expression, Op::Sub)),
+      static_cast<double>(operationCount(expression, Op::Mul)),
+      static_cast<double>(operationCount(expression, Op::UDiv)),
       static_cast<double>(operationCount(expression, Op::Xor)),
       static_cast<double>(operationCount(expression, Op::And)),
+      static_cast<double>(operationCount(expression, Op::Or)),
       static_cast<double>(operationCount(expression, Op::Shl)),
   };
 }
@@ -58,7 +62,8 @@ void validateBackendResult(const BackendResult& backend) {
 SelectionResult runStatic(const std::vector<Candidate>& candidates,
                           std::size_t budget,
                           const BackendEvaluator& evaluate,
-                          double baselineStaticCost) {
+                          double baselineStaticCost,
+                          double baselineBackendObjective) {
   SelectionResult result;
   std::vector<std::size_t> order(candidates.size());
   for (std::size_t index = 0; index < candidates.size(); ++index) {
@@ -72,7 +77,7 @@ SelectionResult runStatic(const std::vector<Candidate>& candidates,
     return candidates[lhs].id < candidates[rhs].id;
   });
 
-  double bestObjective = std::numeric_limits<double>::infinity();
+  double bestObjective = baselineBackendObjective;
   for (const std::size_t index : order) {
     if (result.backendInvocations >= budget) {
       break;
@@ -112,6 +117,10 @@ SearchResult Superoptimizer::run(const ExpressionPtr& reference,
       config.generator.variableCount != config.verifier.variableCount) {
     throw std::invalid_argument(
         "generator and verifier domains must have matching width and variables");
+  }
+  if (config.backend.width != config.generator.width) {
+    throw std::invalid_argument(
+        "generator and backend domains must have matching bit width");
   }
 
   TargetBackend backend(config.backend);
@@ -153,24 +162,50 @@ SearchResult Superoptimizer::run(const ExpressionPtr& reference,
   result.candidates = verified;
 
   CachingBackend adaptiveBackend(backend.evaluator());
+  const auto adaptiveStart = std::chrono::steady_clock::now();
   result.adaptive = AdaptiveSelector(
                         referenceCandidate.staticCost,
                         referenceBackend.objective,
                         config.selector)
                         .select(verified, adaptiveBackend.evaluator());
+  result.adaptiveRuntimeMs =
+      std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - adaptiveStart)
+          .count();
   result.adaptiveCacheHits = adaptiveBackend.cacheHits();
 
   CachingBackend staticBackend(backend.evaluator());
+  const auto staticStart = std::chrono::steady_clock::now();
   result.staticBaseline = runStatic(
       verified, config.selector.backendBudget, staticBackend.evaluator(),
-      referenceCandidate.staticCost);
+      referenceCandidate.staticCost, referenceBackend.objective);
+  result.staticRuntimeMs =
+      std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - staticStart)
+          .count();
   result.staticCacheHits = staticBackend.cacheHits();
 
   CachingBackend exhaustiveBackend(backend.evaluator());
+  const auto exhaustiveStart = std::chrono::steady_clock::now();
   result.exhaustive = runStatic(
       verified, verified.size(), exhaustiveBackend.evaluator(),
-      referenceCandidate.staticCost);
+      referenceCandidate.staticCost, referenceBackend.objective);
+  result.exhaustiveRuntimeMs =
+      std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - exhaustiveStart)
+          .count();
   result.exhaustiveCacheHits = exhaustiveBackend.cacheHits();
+
+  const auto retainReferenceAsIncumbent = [&](SelectionResult& selection) {
+    if (!selection.best.has_value() ||
+        selection.bestBackendResult->objective > referenceBackend.objective) {
+      selection.best = referenceCandidate;
+      selection.bestBackendResult = referenceBackend;
+    }
+  };
+  retainReferenceAsIncumbent(result.adaptive);
+  retainReferenceAsIncumbent(result.staticBaseline);
+  retainReferenceAsIncumbent(result.exhaustive);
 
   return result;
 }

@@ -35,6 +35,11 @@ add_executable(adaptive_superopt_demo
 )
 target_link_libraries(adaptive_superopt_demo PRIVATE adaptive_superopt)
 
+add_executable(adaptive_superopt_budget_experiment
+  tools/budget_experiment.cpp
+)
+target_link_libraries(adaptive_superopt_budget_experiment PRIVATE adaptive_superopt)
+
 enable_testing()
 
 add_executable(adaptive_superopt_tests

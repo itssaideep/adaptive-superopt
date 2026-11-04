@@ -184,9 +184,10 @@ SelectionResult AdaptiveSelector::select(
   }
 
   std::vector<bool> evaluated(candidates.size(), false);
-  double bestObjective = std::numeric_limits<double>::infinity();
+  // The reference backend result is a known incumbent even when the
+  // reference itself is not evaluated again in this search call.
+  double bestObjective = baselineBackendObjective_;
   double bestGain = 0.0;
-  bool hasSuccessfulEvaluation = false;
 
   const auto staticGain = [&](const Candidate& candidate) {
     return (baselineStaticCost_ - candidate.staticCost) /
@@ -226,10 +227,9 @@ SelectionResult AdaptiveSelector::select(
       }
       observedGain = (baselineBackendObjective_ - backend.objective) /
                      baselineBackendObjective_;
-      if (!hasSuccessfulEvaluation || backend.objective < bestObjective) {
+      if (backend.objective < bestObjective) {
         bestObjective = backend.objective;
         bestGain = observedGain;
-        hasSuccessfulEvaluation = true;
         result.best = candidate;
         result.bestBackendResult = backend;
       }
