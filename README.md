@@ -1,46 +1,65 @@
 # Budget-Aware Adaptive Superoptimization
 
-Standalone research system for budget-aware superoptimization of small
-fixed-width bit-vector expressions:
+Standalone C++17 research prototype for selecting profitable, verified
+optimizations when target-backend evaluations are expensive.
 
-> **Budget-Aware Adaptive Superoptimization for Target-Specific Compilers**
+The current implementation is architecture-independent and operates on small
+fixed-width bit-vector expressions. It provides a complete local workflow
+before connecting LLVM, Souper, Z3, or a production compiler backend.
 
-The project investigates whether SMT-verified optimization candidates can be
-selected more effectively when a limited number of candidates may be compiled
-through an expensive target backend.
+## Research question
 
-## What it does
+Can backend feedback improve candidate selection under a fixed evaluation
+budget compared with static-cost ranking, while approaching exhaustive search
+with fewer backend calls?
 
-The executable runs a complete local experiment:
+## Workflow
 
-1. Generate expression candidates from a bounded grammar.
-2. Exhaustively verify candidates over a fixed-width input domain.
-3. Estimate target cost using a deterministic VLIW-style backend model.
-4. Select candidates with the adaptive budget-aware policy.
-5. Compare adaptive selection with static-cost and exhaustive baselines.
-6. Report objective, cycles, code size and backend invocation counts.
+```text
+bounded expression grammar
+            ↓
+finite-domain equivalence verification
+            ↓
+static cost and feature extraction
+            ↓
+adaptive candidate selection
+            ↓
+target-backend cost model
+            ↓
+cycles, code size, and search metrics
+```
 
-The system is intentionally architecture-independent. The target backend is a
-replaceable C++ adapter, and LLVM/Souper/Z3 integrations can be added without
-changing the selector contract.
+The system:
 
-## Components
+1. Generates structurally diverse expression candidates.
+2. Verifies candidates exhaustively over a configured finite input domain.
+3. Evaluates candidates with a deterministic VLIW-style backend model.
+4. Uses a static prior and online backend feedback to rank candidates.
+5. Compares adaptive, static, and exhaustive search.
+6. Records backend calls, runtime, objective, improvement, and optimality.
 
-- `expression.*`: immutable expression trees and fixed-width evaluation;
-- `generator.*`: bounded candidate enumeration;
-- `verifier.*`: exhaustive equivalence checking;
-- `backend.*`: deterministic target-cost model with lanes, dependencies,
-  common-subexpression elimination, strength reduction, pattern folding and
-  evaluation cache;
-- `selector.*`: static prior, online residual model and budgeted acquisition;
-- `superoptimizer.*`: end-to-end pipeline and baseline runners.
+## Current implementation
+
+- **Expressions:** variables, constants, add, subtract, multiply, unsigned
+  divide, XOR, AND, OR, and left shift.
+- **Verification:** exhaustive fixed-width evaluation with configurable case
+  limits.
+- **Backend model:** operation latency, dependency depth, VLIW issue width,
+  common-subexpression elimination, neutral-operation folding, strength
+  reduction, fused multiply-add patterns, and caching.
+- **Adaptive selector:** static-cost prior, online ridge residual model,
+  uncertainty-aware acquisition, family-diverse seeding, and hard backend
+  budgets.
+- **Baselines:** static-cost selection and exhaustive backend evaluation.
+
+## Requirements
+
+- CMake 3.20 or newer
+- C++17 compiler
+
+The project has no external C++ library dependencies.
 
 ## Build and test
-
-Requirements:
-
-- CMake 3.20 or newer;
-- a C++17 compiler.
 
 ```text
 cmake -S . -B build
@@ -48,59 +67,141 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Run the deterministic demonstration:
+With a single-configuration generator, executables are usually under
+`build/` instead of `build/Release/`.
+
+On Windows with LLVM-MinGW, add its `bin` directory to `PATH` before running
+the executables so the runtime DLLs can be found.
+
+## Run the demo
 
 ```text
 build/Release/adaptive_superopt_demo.exe
 ```
 
-On a single-configuration generator, the executable is normally under
-`build/adaptive_superopt_demo` instead.
-
-The demo accepts `--width`, `--depth`, `--max-candidates` and `--budget`.
-For example:
+Options:
 
 ```text
-build/Release/adaptive_superopt_demo.exe --budget 2 --depth 2
+--width N             Bit-vector width, 1–32
+--depth N             Maximum generated expression depth
+--max-candidates N    Candidate generation limit
+--budget N            Adaptive/static backend-call budget
 ```
 
-Run the progressive budget experiment:
+Example:
 
 ```text
+build/Release/adaptive_superopt_demo.exe --width 8 --depth 3 --budget 5
+```
+
+## Run the experiments
+
+Create the output directory and run the progressive budget sweep:
+
+```text
+mkdir results
 build/Release/adaptive_superopt_budget_experiment.exe > results/budget_experiment.csv
 ```
 
-It evaluates masked arithmetic, multiplication, unsigned division, identity,
-and masking/OR benchmarks at budgets 1, 2, 3, 5, 10 and 20. The CSV records
-verified candidate count, backend calls, search runtime, best objective,
-improvement over the reference, and whether the exhaustive optimum was found.
-The same run also writes `results/static_accuracy.csv`, containing static and
-backend costs, absolute/relative prediction error, and rank disagreement.
+The experiment uses 30 benchmarks covering:
 
-On Windows with LLVM-MinGW, run the executable with the compiler's `bin`
-directory on `PATH` so its runtime DLLs can be found.
+- easy identity cases;
+- masking and bitwise transformations;
+- strength-reduction and reassociation cases;
+- unsigned division cases;
+- deceptive multiply-versus-shift backend rankings.
 
-## Planned integration boundary
+It evaluates budgets **1, 2, 3, 5, 10, and 20** using the same verified
+candidate set for each budget. The executable writes:
+
+- `results/budget_experiment.csv` — adaptive, static, and exhaustive results;
+- `results/static_accuracy.csv` — static cost, backend cost, prediction error,
+  and static/backend rank disagreement.
+
+Important CSV fields include:
+
+| Field | Meaning |
+|---|---|
+| `verified_candidates` | Number of equivalent candidates retained |
+| `backend_calls` | Actual target-backend evaluations |
+| `runtime_ms` | Selection runtime for that method |
+| `best_objective` | Best backend objective found |
+| `improvement_percent` | Improvement relative to the reference |
+| `global_optimum` | Whether the exhaustive result was reached |
+
+## Semantics and correctness boundary
+
+The local verifier defines arithmetic over unsigned bit-vectors:
+
+- addition, subtraction, and multiplication wrap modulo `2^width`;
+- division is unsigned;
+- division by zero is rejected;
+- shifts are masked to the configured width;
+- inputs and constants are truncated to the configured width.
+
+The correctness guarantee is exhaustive equivalence within the configured
+finite domain. It is not a general proof of LLVM semantics, undefined
+behavior, memory effects, floating-point behavior, or target-specific
+instruction semantics.
+
+## Project layout
 
 ```text
-expression candidate
-        ↓
-fixed-width equivalence check
-        ↓
-static feature extraction
-        ↓
-AdaptiveSelector
-        ↓
-target backend adapter
-        ↓
-cycles, code size and VLIW-style scheduling reports
+include/adaptive_superopt/
+  expression.h       Expression representation and evaluation API
+  generator.h        Candidate generation API
+  verifier.h         Finite-domain verification API
+  backend.h          Backend model and cache API
+  selector.h         Adaptive selection API
+  superoptimizer.h   End-to-end pipeline API
+
+src/
+  expression.cpp
+  generator.cpp
+  verifier.cpp
+  backend.cpp
+  selector.cpp
+  superoptimizer.cpp
+
+tools/
+  demo.cpp
+  budget_experiment.cpp
+
+tests/
+  selector_tests.cpp
+
+docs/
+  research-plan.md
 ```
 
-The current correctness guarantee is exhaustive equivalence within the
-configured finite input domain. Multiplication and arithmetic use modulo
-`2^width` semantics; division is unsigned and requires a nonzero divisor. It
-is not a proof for arbitrary LLVM undefined-behavior semantics. LLVM/Souper/Z3 and real compiler backends remain
-integration adapters for a later target-specific deployment.
+## Extending the system
 
-See [`docs/research-plan.md`](docs/research-plan.md) for the research
-question, baselines, metrics and experimental protocol.
+### Add a benchmark
+
+Add a reference expression and equivalent seed expressions in
+`tools/budget_experiment.cpp`. Keep the input width, verifier configuration,
+and backend configuration identical across compared methods.
+
+### Connect a real backend
+
+Implement a `BackendEvaluator` that returns `BackendResult` and preserves the
+same candidate identity, objective definition, failure handling, and metric
+logging. The selector should receive only semantically verified candidates.
+
+### Connect LLVM/Souper/Z3
+
+Replace the bounded expression generator and verifier with adapters that
+produce fixed-width LLVM candidates and perform LLVM-aware equivalence or
+translation validation. The current selector/backend interfaces are the
+integration boundary.
+
+## Research limitations
+
+The local backend is a deterministic model, not a real compiler or simulator.
+Its costs are useful for controlled experiments, but claims about hardware,
+LLVM code generation, or DSP scheduling require a real target backend and
+independent validation. The static-accuracy CSV is also diagnostic: raw static
+cost and backend objective are not calibrated physical units.
+
+See [`docs/research-plan.md`](docs/research-plan.md) for baselines, metrics,
+experimental safeguards, and literature context.
